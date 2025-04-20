@@ -22,7 +22,7 @@ def on_press(key):
     except AttributeError:
         # Spezielle Tasten haben keinen char-Wert
         print(f"Spezielle Taste gedrückt: {key} (Name/Code)")
-        
+    
         # Zusätzliche Informationen für Spezialschlüssel
         if hasattr(key, 'name'):
             print(f"  - Name der Taste: {key.name}")

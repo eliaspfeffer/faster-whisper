@@ -60,27 +60,57 @@ class RealtimeSpeechToText:
         # Audio-Frames
         self.frames = []
         
-        # Steuerungstaste (rechte Strg-Taste)
-        self.control_key = Key.ctrl_r
+        # Steuerungstasten (mehrere Tasten können verwendet werden)
+        self.control_keys = [Key.ctrl_r, Key.shift_r]
+        self.pressed_key = None  # Speichert, welche Steuertaste aktuell gedrückt ist
         
-        print("System bereit. Halten Sie die rechte Strg-Taste gedrückt, während Sie sprechen.")
+        print("System bereit. Halten Sie die rechte Strg-Taste ODER die linke Alt-Taste gedrückt, während Sie sprechen.")
         print("Der Text wird an der Position eingefügt, wo sich der Cursor beim Start der Aufnahme befand.")
         print("Drücken Sie ESC zum Beenden.")
 
     def on_press(self, key):
         """Wird aufgerufen, wenn eine Taste gedrückt wird"""
-        if key == self.control_key and not self.is_recording:
+        if key in self.control_keys and not self.is_recording:
+            # Speichere die gedrückte Steuertaste
+            self.pressed_key = key
+            
             # Speichere die aktuelle Cursor-Position
             self.recording_start_position = self.mouse.position
             self.start_recording()
-            print("Aufnahme gestartet... (Sprechen Sie, solange Sie die rechte Strg-Taste gedrückt halten)")
+            
+            # Bestimme den Namen der Taste für die Ausgabe
+            key_name = self.get_key_name(key)
+            print(f"Aufnahme gestartet... (Sprechen Sie, solange Sie die {key_name} gedrückt halten)")
             print(f"Cursor-Position gespeichert: {self.recording_start_position}")
+
+    def get_key_name(self, key):
+        """Gibt den benutzerfreundlichen Namen einer Taste zurück"""
+        key_names = {
+            Key.ctrl_r: "rechte Strg-Taste",
+            Key.alt: "linke Alt-Taste",
+            Key.alt_gr: "AltGr-Taste",
+            Key.alt_r: "rechte Alt-Taste",
+            Key.alt_l: "linke Alt-Taste",
+            Key.ctrl: "Strg-Taste",
+            Key.shift_r: "rechte Umschalttaste",
+            Key.shift_l: "linke Umschalttaste",
+            Key.f12: "F12-Taste"
+        }
+        return key_names.get(key, str(key))
 
     def on_release(self, key):
         """Wird aufgerufen, wenn eine Taste losgelassen wird"""
-        if key == self.control_key and self.is_recording:
+        if key == self.pressed_key and self.is_recording:
             self.stop_recording()
+            
+            key_name = self.get_key_name(key)
+            print(f"{key_name} losgelassen. Aufnahme gestoppt.")
+            
+            if self.recording_thread and self.recording_thread.is_alive():
+                self.recording_thread.join()
+            
             self.transcribe_audio()
+            self.pressed_key = None
         elif key == Key.esc:
             # ESC beendet das Programm
             return False
@@ -215,8 +245,8 @@ if __name__ == "__main__":
                         help="Gerät für die Berechnung (cpu oder cuda)")
     parser.add_argument("--compute_type", default="int8", choices=["int8", "float16", "float32"], 
                         help="Berechnungstyp (int8, float16, float32)")
-    parser.add_argument("--key", default="ctrl_r", choices=["alt_gr", "alt_r", "alt_l", "ctrl", "ctrl_r", "shift_r", "shift_l", "f12"], 
-                        help="Taste für die Aufnahmesteuerung (Standard: ctrl_r = rechte Strg-Taste)")
+    parser.add_argument("--key", default="both", choices=["alt", "ctrl_r", "alt_gr", "alt_r", "alt_l", "ctrl", "shift_r", "shift_l", "f12", "both"], 
+                        help="Taste(n) für die Aufnahmesteuerung (Standard: 'both' = rechte Strg-Taste UND linke Alt-Taste)")
     parser.add_argument("--restore-cursor", action="store_true", 
                         help="Nach dem Einfügen den Cursor wieder an seine ursprüngliche Position zurücksetzen")
     
@@ -230,21 +260,27 @@ if __name__ == "__main__":
     )
     
     # Optional: Anpassung der Steuerungstaste über Kommandozeilenparameter
-    if args.key != "ctrl_r":
-        if args.key == "alt_gr":
-            stt.control_key = Key.alt_gr
+    if args.key != "both":
+        if args.key == "alt":
+            stt.control_keys = [Key.alt]
+        elif args.key == "ctrl_r":
+            stt.control_keys = [Key.ctrl_r]
+        elif args.key == "alt_gr":
+            stt.control_keys = [Key.alt_gr]
         elif args.key == "alt_r":
-            stt.control_key = Key.alt_r
+            stt.control_keys = [Key.alt_r]
         elif args.key == "alt_l":
-            stt.control_key = Key.alt_l
+            stt.control_keys = [Key.alt_l]
         elif args.key == "ctrl":
-            stt.control_key = Key.ctrl
+            stt.control_keys = [Key.ctrl]
         elif args.key == "shift_r":
-            stt.control_key = Key.shift_r
+            stt.control_keys = [Key.shift_r]
         elif args.key == "shift_l":
-            stt.control_key = Key.shift_l
+            stt.control_keys = [Key.shift_l]
         elif args.key == "f12":
-            stt.control_key = Key.f12
+            stt.control_keys = [Key.f12]
         print(f"Steuerungstaste geändert auf: {args.key}")
+    else:
+        print("Steuerungstasten: Rechte Strg-Taste UND linke Alt-Taste verfügbar")
     
     stt.run() 

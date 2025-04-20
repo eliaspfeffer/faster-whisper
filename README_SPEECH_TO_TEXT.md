@@ -34,7 +34,7 @@ python3 realtime_speech_to_text.py
 ### Bedienung:
 
 1. **Positionieren Sie den Cursor** an der Stelle, wo der Text eingefügt werden soll
-2. **Halten Sie die rechte Strg-Taste gedrückt**, während Sie sprechen
+2. **Halten Sie die rechte Strg-Taste ODER die linke Alt-Taste gedrückt**, während Sie sprechen
 3. **Lassen Sie die Taste los**, um die Transkription zu starten
 4. Der erkannte Text wird an der Stelle eingefügt, wo sich der Cursor beim Start der Aufnahme befand, auch wenn Sie während der Aufnahme woanders hingeklickt haben
 5. Drücken Sie **ESC**, um das Programm zu beenden
@@ -47,8 +47,12 @@ Das Skript unterstützt verschiedene Optionen:
 - `--language`: Sprachcode (z.B. 'de' für Deutsch, 'en' für Englisch) [Standard: de]
 - `--device`: Gerät für die Berechnung (cpu oder cuda) [Standard: cpu]
 - `--compute_type`: Berechnungstyp (int8, float16, float32) [Standard: int8]
-- `--key`: Taste für die Aufnahmesteuerung [Standard: ctrl_r]
-  - Verfügbare Optionen: ctrl_r, alt_gr, alt_r, alt_l, ctrl, shift_r, shift_l, f12
+- `--key`: Taste für die Aufnahmesteuerung [Standard: both]
+  - Verfügbare Optionen:
+    - `both`: Sowohl rechte Strg-Taste als auch linke Alt-Taste (Standard)
+    - `alt`: Nur die linke Alt-Taste
+    - `ctrl_r`: Nur die rechte Strg-Taste
+    - Weitere Optionen: alt_gr, alt_r, alt_l, ctrl, shift_r, shift_l, f12
 - `--restore-cursor`: Nach dem Einfügen des Textes den Cursor wieder an seine aktuelle Position zurücksetzen
 
 Beispiel für ein größeres Modell mit Englisch als Sprache:
@@ -63,10 +67,10 @@ Beispiel für GPU-Nutzung (falls verfügbar):
 python3 realtime_speech_to_text.py --device cuda --compute_type float16
 ```
 
-Beispiel für Änderung der Steuerungstaste auf F12:
+Beispiel für Änderung der Steuerungstaste auf nur die linke Alt-Taste:
 
 ```bash
-python3 realtime_speech_to_text.py --key f12
+python3 realtime_speech_to_text.py --key alt
 ```
 
 ## Hinweise
