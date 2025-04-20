@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Echtzeit-Spracherkennung
+Comment=Startet die Echtzeit-Spracherkennung im Hintergrund
+Exec=/home/loskud-3neufi-barem/Documents/Github/faster-whisper/start_speech_to_text.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true
+Hidden=false
+NoDisplay=false 
