@@ -44,9 +44,11 @@ class RealtimeSpeechToText:
         # Flags für Status und Steuerung
         self.is_recording = False
         self.stop_event = threading.Event()
+        self.space_pressed_during_transcription = False
         
         # Speicherung des aktiven Fensters beim Start der Aufnahme
         self.active_window_id = None
+        self.active_window_name = None
         
         # Initialisieren von PyAudio
         self.p = pyaudio.PyAudio()
@@ -71,9 +73,24 @@ class RealtimeSpeechToText:
         # Bestimme das Betriebssystem für fenster-spezifische Funktionen
         self.system = platform.system()
         
+        # Starte den Tastatur-Listener für Leertaste
+        self.space_listener = keyboard.Listener(on_press=self.on_key_press)
+        self.space_listener.daemon = True
+        self.space_listener.start()
+        
         print("System bereit. Halten Sie die rechte Strg-Taste ODER die rechte Umschalttaste gedrückt, während Sie sprechen.")
         print("Der Text wird in das aktive Textfeld eingefügt, auch wenn Sie während der Aufnahme woanders hinklicken.")
+        print("Bei Eingabe in Cursor wird automatisch Enter gedrückt, wenn keine Leertaste gedrückt wurde.")
         print("Drücken Sie ESC zum Beenden.")
+
+    def on_key_press(self, key):
+        """Überwacht Tastendrücke, insbesondere die Leertaste"""
+        try:
+            if key == Key.space and not self.is_recording:
+                self.space_pressed_during_transcription = True
+                print("Leertaste erkannt - kein automatischer Enter")
+        except:
+            pass  # Ignoriere Fehler bei der Tastenerkennung
 
     def get_active_window_id(self):
         """Ermittelt die ID des aktiven Fensters abhängig vom Betriebssystem"""
@@ -105,6 +122,51 @@ class RealtimeSpeechToText:
                 print("Warnung: AppleScript konnte nicht ausgeführt werden.")
         
         return None
+
+    def get_active_window_name(self):
+        """Ermittelt den Namen der aktiven Anwendung"""
+        if self.system == "Linux":
+            try:
+                # Für Linux verwenden wir xdotool, um den Fensternamen zu erhalten
+                result = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], 
+                                        capture_output=True, text=True)
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except (FileNotFoundError, subprocess.SubprocessError):
+                pass
+                
+        elif self.system == "Windows":
+            try:
+                # Für Windows
+                import ctypes
+                from ctypes import windll, wintypes, create_unicode_buffer
+                
+                hwnd = windll.user32.GetForegroundWindow()
+                length = windll.user32.GetWindowTextLengthW(hwnd)
+                buf = create_unicode_buffer(length + 1)
+                windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+                return buf.value
+            except (ImportError, AttributeError):
+                pass
+                
+        elif self.system == "Darwin":  # macOS
+            try:
+                # Für macOS
+                cmd = """osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'"""
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except subprocess.SubprocessError:
+                pass
+        
+        return None
+
+    def is_cursor_app(self):
+        """Überprüft, ob die aktive Anwendung Cursor ist"""
+        window_name = self.active_window_name
+        if window_name:
+            return "Cursor" in window_name
+        return False
 
     def focus_window(self, window_id):
         """Fokussiert ein Fenster basierend auf seiner ID"""
@@ -143,12 +205,19 @@ class RealtimeSpeechToText:
             # Speichere die gedrückte Steuertaste
             self.pressed_key = key
             
-            # Speichere das aktive Fenster
+            # Speichere das aktive Fenster und seinen Namen
             self.active_window_id = self.get_active_window_id()
+            self.active_window_name = self.get_active_window_name()
+            
             if self.active_window_id:
                 print(f"Aktives Fenster-ID gespeichert: {self.active_window_id}")
+                if self.active_window_name:
+                    print(f"Aktive Anwendung: {self.active_window_name}")
             else:
                 print("Konnte aktives Fenster nicht ermitteln.")
+            
+            # Setze die Leertasten-Erkennung zurück
+            self.space_pressed_during_transcription = False
             
             self.start_recording()
             
@@ -281,6 +350,13 @@ class RealtimeSpeechToText:
                 # Füge den Text ein
                 self.keyboard.type(text + " ")  # Füge Leerzeichen nach dem Text ein
                 
+                # Prüfe, ob es sich um Cursor handelt und keine Leertaste gedrückt wurde
+                if self.is_cursor_app() and not self.space_pressed_during_transcription:
+                    print("Cursor erkannt - drücke automatisch Enter")
+                    time.sleep(0.1)  # Kurze Pause vor dem Enter-Druck
+                    self.keyboard.press(Key.enter)
+                    self.keyboard.release(Key.enter)
+                
                 # Optional: Zurück zum vorherigen Fenster wechseln
                 if current_window and current_window != self.active_window_id:
                     time.sleep(0.1)
@@ -304,6 +380,8 @@ class RealtimeSpeechToText:
                     self.stream.stop_stream()
                 self.stream.close()
             self.p.terminate()
+            if self.space_listener.running:
+                self.space_listener.stop()
             print("\nProgramm beendet.")
 
 if __name__ == "__main__":
