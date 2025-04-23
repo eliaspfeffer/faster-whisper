@@ -15,12 +15,8 @@ from faster_whisper import WhisperModel
 import subprocess
 import re
 import platform
-import traceback
-import signal
-import sys
 
 class RealtimeSpeechToText:
-    hasPlayedSound=False
     def __init__(self, model_size="base", language="de", device="cpu", compute_type="int8"):
         """
         Initialisierung der Echtzeit-Spracherkennung mit Faster-Whisper
@@ -49,8 +45,6 @@ class RealtimeSpeechToText:
         self.is_recording = False
         self.stop_event = threading.Event()
         self.space_pressed_during_transcription = False
-        self.program_active = True  # Flag zum Kontrollieren des Programmablaufs
-        self._cleanup_done = False  # Flag für doppeltes Cleanup vermeiden
         
         # Speicherung des aktiven Fensters beim Start der Aufnahme
         self.active_window_id = None
@@ -60,18 +54,14 @@ class RealtimeSpeechToText:
         self.p = pyaudio.PyAudio()
         
         # Audio-Stream einmalig öffnen
-        try:
-            self.stream = self.p.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.rate,
-                input=True,
-                frames_per_buffer=self.chunk,
-                start=False  # Stream nicht sofort starten
-            )
-        except Exception as e:
-            print(f"Warnung: Audio-Stream konnte nicht geöffnet werden: {str(e)}")
-            self.stream = None
+        self.stream = self.p.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.rate,
+            input=True,
+            frames_per_buffer=self.chunk,
+            start=False  # Stream nicht sofort starten
+        )
         
         # Audio-Frames
         self.frames = []
@@ -83,174 +73,157 @@ class RealtimeSpeechToText:
         # Bestimme das Betriebssystem für fenster-spezifische Funktionen
         self.system = platform.system()
         
-        # Konfiguriere Signal-Handler für sauberes Beenden
-        signal.signal(signal.SIGINT, self.signal_handler)
+        # Starte den Tastatur-Listener für Leertaste
+        self.space_listener = keyboard.Listener(on_press=self.on_key_press)
+        self.space_listener.daemon = True
+        self.space_listener.start()
         
         print("System bereit. Halten Sie die rechte Strg-Taste ODER die rechte Umschalttaste gedrückt, während Sie sprechen.")
         print("Der Text wird in das aktive Textfeld eingefügt, auch wenn Sie während der Aufnahme woanders hinklicken.")
         print("Bei Eingabe in Cursor wird automatisch Enter gedrückt, wenn keine Leertaste gedrückt wurde.")
-        print("Drücken Sie ESC zum Beenden.")
+        print("Drücken Sie Strg+C im Terminal zum Beenden.")
 
-    def signal_handler(self, sig, frame):
-        """Handler für SIGINT (Ctrl+C) um sauberes Beenden zu ermöglichen"""
-        print("\nProgramm wird beendet...")
-        self.cleanup()
-        os._exit(0)  # Beende das Programm sofort
-
-    def on_press(self, key):
-        """Wird aufgerufen, wenn eine Taste gedrückt wird"""
+    def on_key_press(self, key):
+        """Überwacht Tastendrücke, insbesondere die Leertaste"""
         try:
-            # Überwache die Leertaste
             if key == Key.space and not self.is_recording:
                 self.space_pressed_during_transcription = True
                 print("Leertaste erkannt - kein automatischer Enter")
-                
-            # Überwache die Steuerungstasten
-            elif key in self.control_keys and not self.is_recording:
-                # Speichere die gedrückte Steuertaste
-                self.pressed_key = key
-                
-                # Speichere das aktive Fenster und seinen Namen
-                self.active_window_id = self.get_active_window_id()
-                self.active_window_name = self.get_active_window_name()
-                
-                if self.active_window_id:
-                    print(f"Aktives Fenster-ID gespeichert: {self.active_window_id}")
-                    if self.active_window_name:
-                        print(f"Aktive Anwendung: {self.active_window_name}")
-                else:
-                    print("Konnte aktives Fenster nicht ermitteln.")
-                
-                # Setze die Leertasten-Erkennung zurück
-                self.space_pressed_during_transcription = False
-                
-                self.start_recording()
-                
-                # Bestimme den Namen der Taste für die Ausgabe
-                key_name = self.get_key_name(key)
-                print(f"Aufnahme gestartet... (Sprechen Sie, solange Sie die {key_name} gedrückt halten)")
-        except Exception as e:
-            print(f"Fehler bei der Tastenverarbeitung: {str(e)}")
-            # Der Listener sollte weiterlaufen, also kein Rückgabewert
+        except:
+            pass  # Ignoriere Fehler bei der Tastenerkennung
 
     def get_active_window_id(self):
         """Ermittelt die ID des aktiven Fensters abhängig vom Betriebssystem"""
-        try:
-            if self.system == "Linux":
-                try:
-                    # In Linux (X11) verwenden wir xdotool
-                    result = subprocess.run(["xdotool", "getactivewindow"], capture_output=True, text=True)
-                    if result.returncode == 0:
-                        return result.stdout.strip()
-                except (FileNotFoundError, subprocess.SubprocessError):
-                    print("Warnung: xdotool nicht gefunden oder Fehler bei der Ausführung.")
-                    
-            elif self.system == "Windows":
-                try:
-                    # In Windows können wir GetForegroundWindow aus user32.dll nutzen
-                    import ctypes
-                    return ctypes.windll.user32.GetForegroundWindow()
-                except (ImportError, AttributeError):
-                    print("Warnung: Windows-API konnte nicht genutzt werden.")
-                    
-            elif self.system == "Darwin":  # macOS
-                try:
-                    # In macOS verwenden wir AppleScript
-                    cmd = "osascript -e 'tell application \"System Events\" to get id of first application process whose frontmost is true'"
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        return result.stdout.strip()
-                except subprocess.SubprocessError:
-                    print("Warnung: AppleScript konnte nicht ausgeführt werden.")
-        except Exception as e:
-            print(f"Fehler beim Ermitteln der Fenster-ID: {str(e)}")
+        if self.system == "Linux":
+            try:
+                # In Linux (X11) verwenden wir xdotool
+                result = subprocess.run(["xdotool", "getactivewindow"], capture_output=True, text=True)
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except (FileNotFoundError, subprocess.SubprocessError):
+                print("Warnung: xdotool nicht gefunden oder Fehler bei der Ausführung.")
+                
+        elif self.system == "Windows":
+            try:
+                # In Windows können wir GetForegroundWindow aus user32.dll nutzen
+                import ctypes
+                return ctypes.windll.user32.GetForegroundWindow()
+            except (ImportError, AttributeError):
+                print("Warnung: Windows-API konnte nicht genutzt werden.")
+                
+        elif self.system == "Darwin":  # macOS
+            try:
+                # In macOS verwenden wir AppleScript
+                cmd = "osascript -e 'tell application \"System Events\" to get id of first application process whose frontmost is true'"
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except subprocess.SubprocessError:
+                print("Warnung: AppleScript konnte nicht ausgeführt werden.")
         
         return None
 
     def get_active_window_name(self):
         """Ermittelt den Namen der aktiven Anwendung"""
-        try:
-            if self.system == "Linux":
-                try:
-                    # Für Linux verwenden wir xdotool, um den Fensternamen zu erhalten
-                    result = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], 
-                                            capture_output=True, text=True)
-                    if result.returncode == 0:
-                        return result.stdout.strip()
-                except (FileNotFoundError, subprocess.SubprocessError):
-                    pass
-                    
-            elif self.system == "Windows":
-                try:
-                    # Für Windows
-                    import ctypes
-                    from ctypes import windll, wintypes, create_unicode_buffer
-                    
-                    hwnd = windll.user32.GetForegroundWindow()
-                    length = windll.user32.GetWindowTextLengthW(hwnd)
-                    buf = create_unicode_buffer(length + 1)
-                    windll.user32.GetWindowTextW(hwnd, buf, length + 1)
-                    return buf.value
-                except (ImportError, AttributeError):
-                    pass
-                    
-            elif self.system == "Darwin":  # macOS
-                try:
-                    # Für macOS
-                    cmd = """osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'"""
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        return result.stdout.strip()
-                except subprocess.SubprocessError:
-                    pass
-        except Exception as e:
-            print(f"Fehler beim Ermitteln des Fensternamens: {str(e)}")
+        if self.system == "Linux":
+            try:
+                # Für Linux verwenden wir xdotool, um den Fensternamen zu erhalten
+                result = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], 
+                                        capture_output=True, text=True)
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except (FileNotFoundError, subprocess.SubprocessError):
+                pass
+                
+        elif self.system == "Windows":
+            try:
+                # Für Windows
+                import ctypes
+                from ctypes import windll, wintypes, create_unicode_buffer
+                
+                hwnd = windll.user32.GetForegroundWindow()
+                length = windll.user32.GetWindowTextLengthW(hwnd)
+                buf = create_unicode_buffer(length + 1)
+                windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+                return buf.value
+            except (ImportError, AttributeError):
+                pass
+                
+        elif self.system == "Darwin":  # macOS
+            try:
+                # Für macOS
+                cmd = """osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'"""
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            except subprocess.SubprocessError:
+                pass
         
         return None
 
     def is_cursor_app(self):
         """Überprüft, ob die aktive Anwendung Cursor ist"""
-        try:
-            window_name = self.active_window_name
-            if window_name:
-                return "Cursor" in window_name
-        except Exception as e:
-            print(f"Fehler bei der Anwendungserkennung: {str(e)}")
+        window_name = self.active_window_name
+        if window_name:
+            return "Cursor" in window_name
         return False
 
     def focus_window(self, window_id):
         """Fokussiert ein Fenster basierend auf seiner ID"""
         if not window_id:
             return False
-        
-        try:
-            if self.system == "Linux":
-                try:
-                    subprocess.run(["xdotool", "windowactivate", window_id], check=False)
-                    return True
-                except (FileNotFoundError, subprocess.SubprocessError):
-                    print("Fenster konnte nicht fokussiert werden.")
-                    
-            elif self.system == "Windows":
-                try:
-                    import ctypes
-                    ctypes.windll.user32.SetForegroundWindow(window_id)
-                    return True
-                except (ImportError, AttributeError):
-                    print("Windows-API konnte nicht genutzt werden.")
-                    
-            elif self.system == "Darwin":  # macOS
-                try:
-                    # Dies ist eine vereinfachte Version, die möglicherweise nicht für alle Anwendungen funktioniert
-                    cmd = f"osascript -e 'tell application \"System Events\" to set frontmost of first application process whose id is {window_id} to true'"
-                    subprocess.run(cmd, shell=True, check=False)
-                    return True
-                except subprocess.SubprocessError:
-                    print("AppleScript konnte nicht ausgeführt werden.")
-        except Exception as e:
-            print(f"Fehler beim Fokuswechsel: {str(e)}")
+            
+        if self.system == "Linux":
+            try:
+                subprocess.run(["xdotool", "windowactivate", window_id], check=False)
+                return True
+            except (FileNotFoundError, subprocess.SubprocessError):
+                print("Fenster konnte nicht fokussiert werden.")
+                
+        elif self.system == "Windows":
+            try:
+                import ctypes
+                ctypes.windll.user32.SetForegroundWindow(window_id)
+                return True
+            except (ImportError, AttributeError):
+                print("Windows-API konnte nicht genutzt werden.")
+                
+        elif self.system == "Darwin":  # macOS
+            try:
+                # Dies ist eine vereinfachte Version, die möglicherweise nicht für alle Anwendungen funktioniert
+                cmd = f"osascript -e 'tell application \"System Events\" to set frontmost of first application process whose id is {window_id} to true'"
+                subprocess.run(cmd, shell=True, check=False)
+                return True
+            except subprocess.SubprocessError:
+                print("AppleScript konnte nicht ausgeführt werden.")
         
         return False
+
+    def on_press(self, key):
+        """Wird aufgerufen, wenn eine Taste gedrückt wird"""
+        if key in self.control_keys and not self.is_recording:
+            # Speichere die gedrückte Steuertaste
+            self.pressed_key = key
+            
+            # Speichere das aktive Fenster und seinen Namen
+            self.active_window_id = self.get_active_window_id()
+            self.active_window_name = self.get_active_window_name()
+            
+            if self.active_window_id:
+                print(f"Aktives Fenster-ID gespeichert: {self.active_window_id}")
+                if self.active_window_name:
+                    print(f"Aktive Anwendung: {self.active_window_name}")
+            else:
+                print("Konnte aktives Fenster nicht ermitteln.")
+            
+            # Setze die Leertasten-Erkennung zurück
+            self.space_pressed_during_transcription = False
+            
+            self.start_recording()
+            
+            # Bestimme den Namen der Taste für die Ausgabe
+            key_name = self.get_key_name(key)
+            print(f"Aufnahme gestartet... (Sprechen Sie, solange Sie die {key_name} gedrückt halten)")
 
     def get_key_name(self, key):
         """Gibt den benutzerfreundlichen Namen einer Taste zurück"""
@@ -269,27 +242,17 @@ class RealtimeSpeechToText:
 
     def on_release(self, key):
         """Wird aufgerufen, wenn eine Taste losgelassen wird"""
-        try:
-            if key == self.pressed_key and self.is_recording:
-                self.stop_recording()
-                
-                key_name = self.get_key_name(key)
-                print(f"{key_name} losgelassen. Aufnahme gestoppt.")
-                
-                if self.recording_thread and self.recording_thread.is_alive():
-                    self.recording_thread.join()
-                
-                self.transcribe_audio()
-                self.pressed_key = None
-            elif key == Key.esc:
-                # ESC beendet das Programm
-                print("ESC gedrückt. Beende Programm...")
-                self.program_active = False
-                self.cleanup()
-                return False  # Beende den Listener
-        except Exception as e:
-            print(f"Fehler bei der Tastenverarbeitung (Loslassen): {str(e)}")
-            # Bei Fehlern sollte der Listener trotzdem weiterlaufen
+        if key == self.pressed_key and self.is_recording:
+            self.stop_recording()
+            
+            key_name = self.get_key_name(key)
+            print(f"{key_name} losgelassen. Aufnahme gestoppt.")
+            
+            if self.recording_thread and self.recording_thread.is_alive():
+                self.recording_thread.join()
+            
+            self.transcribe_audio()
+            self.pressed_key = None
 
     def start_recording(self):
         """Startet die Audioaufnahme"""
@@ -311,7 +274,7 @@ class RealtimeSpeechToText:
 
     def record_audio(self):
         """Nimmt Audio auf, solange is_recording True ist"""
-        while self.is_recording and self.program_active:
+        while self.is_recording:
             try:
                 data = self.stream.read(self.chunk, exception_on_overflow=False)
                 self.frames.append(data)
@@ -326,10 +289,7 @@ class RealtimeSpeechToText:
         
         # Warte, bis der Aufnahme-Thread beendet ist
         if hasattr(self, 'recording_thread') and self.recording_thread.is_alive():
-            try:
-                self.recording_thread.join(timeout=1)
-            except Exception as e:
-                print(f"Fehler beim Beenden des Aufnahme-Threads: {str(e)}")
+            self.recording_thread.join(timeout=1)
         
         print("Aufnahme beendet. Transkribiere...")
 
@@ -365,10 +325,7 @@ class RealtimeSpeechToText:
                 text += segment.text
             
             # Lösche die temporäre Datei
-            try:
-                os.unlink(temp_filename)
-            except Exception as e:
-                print(f"Warnung: Konnte temporäre Datei nicht löschen: {str(e)}")
+            os.unlink(temp_filename)
             
             # Wenn Text erkannt wurde, gebe ihn aus
             text = text.strip()
@@ -403,104 +360,26 @@ class RealtimeSpeechToText:
                     self.focus_window(current_window)
         except Exception as e:
             print(f"Fehler bei der Transkription: {str(e)}")
-            traceback.print_exc()  # Ausführlichere Fehlerausgabe
-
-    def play_notification_sound(self):
-        """Spielt einen kurzen Benachrichtigungston ab"""
-        try:
-            # Verwende Systembefehl zum Abspielen eines Tons (plattformunabhängig)
-            if self.system == "Linux":
-                # Versuche verschiedene Linux-Sounds, bis einer funktioniert
-                sound_files = [
-                    "/usr/share/sounds/freedesktop/stereo/complete.oga",
-                    "/usr/share/sounds/freedesktop/stereo/message.oga",
-                    "/usr/share/sounds/ubuntu/stereo/dialog-information.ogg",
-                    "/usr/share/sounds/sound-icons/glass-water-1.wav"
-                ]
-                
-                for sound_file in sound_files:
-                    if os.path.exists(sound_file):
-                        subprocess.run(["paplay", sound_file], 
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                        break
-                        
-            elif self.system == "Windows":
-                import winsound
-                winsound.MessageBeep(winsound.MB_OK)
-                
-            elif self.system == "Darwin":  # macOS
-                subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        except Exception:
-            # Fallback: Erzeuge einfachen Piepton, wenn möglich
-            try:
-                if self.system == "Windows":
-                    import winsound
-                    winsound.Beep(800, 300)  # 800 Hz für 300 ms
-                else:
-                    print("\a")  # ASCII-Bell-Zeichen
-                    sys.stdout.flush()
-            except:
-                pass  # Ignoriere Fehler beim Fallback-Sound
-
-    def cleanup(self):
-        # Spiele den Benachrichtigungston ab (vor dem Schließen der Audio-Ressourcen)
-        if self.hasPlayedSound == False:
-            self.play_notification_sound()
-            self.hasPlayedSound = True
-        """Führt Aufräumarbeiten durch"""
-        try:
-            # Verhindere doppeltes Aufräumen
-            if not hasattr(self, '_cleanup_done'):
-                self._cleanup_done = True
-                
-                # Audio-Stream schließen, nur wenn er existiert und noch nicht geschlossen ist
-                if hasattr(self, 'stream') and self.stream:
-                    try:
-                        if self.stream.is_active():
-                            self.stream.stop_stream()
-                        self.stream.close()
-                    except Exception as e:
-                        # Leise ignorieren, da der Stream möglicherweise bereits geschlossen ist
-                        pass
-                
-                # PyAudio beenden
-                if hasattr(self, 'p') and self.p:
-                    try:
-                        self.p.terminate()
-                    except Exception as e:
-                        # Leise ignorieren
-                        pass
-                
-                print("\nProgramm beendet.")
-        except Exception as e:
-            print(f"Fehler beim Aufräumen: {str(e)}")
 
     def run(self):
         """Startet die Echtzeit-Spracherkennung mit Tastatürsteuerung"""
         try:
             # Starte den Tastatur-Listener
             with Listener(on_press=self.on_press, on_release=self.on_release) as listener:
-                # Solange das Programm aktiv sein soll, laufen lassen
-                while self.program_active:
-                    try:
-                        # Alle 0.1 Sekunden prüfen, ob der Listener noch läuft
-                        if not listener.running:
-                            print("Tastatur-Listener hat sich beendet. Starte neu...")
-                            # Listener ist beendet - neu starten
-                            with Listener(on_press=self.on_press, on_release=self.on_release) as listener:
-                                time.sleep(0.1)
-                        else:
-                            time.sleep(0.1)
-                    except Exception as e:
-                        print(f"Fehler in der Hauptschleife: {str(e)}")
-                        time.sleep(1)  # Kurze Pause vor dem nächsten Versuch
+                listener.join()
+                
         except Exception as e:
-            print(f"Schwerwiegender Fehler: {str(e)}")
-            traceback.print_exc()
+            print(f"Fehler: {str(e)}")
         finally:
             # Aufräumen
-            self.cleanup()
+            if self.stream:
+                if self.stream.is_active():
+                    self.stream.stop_stream()
+                self.stream.close()
+            self.p.terminate()
+            if self.space_listener.running:
+                self.space_listener.stop()
+            print("\nProgramm beendet.")
 
 if __name__ == "__main__":
     import argparse
@@ -551,14 +430,4 @@ if __name__ == "__main__":
     else:
         print("Steuerungstasten: Rechte Strg-Taste UND rechte Umschalttaste verfügbar")
     
-    try:
-        # Hauptprogramm starten
-        stt.run()
-    except KeyboardInterrupt:
-        print("\nProgramm durch Tastenkombination (Ctrl+C) beendet.")
-    except Exception as e:
-        print(f"Unerwarteter Fehler: {str(e)}")
-        traceback.print_exc()
-    finally:
-        # Sicherstellen, dass Aufräumarbeiten durchgeführt werden
-        stt.cleanup() 
+    stt.run() 
