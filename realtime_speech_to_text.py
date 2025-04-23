@@ -88,7 +88,7 @@ class RealtimeSpeechToText:
         try:
             if key == Key.space and not self.is_recording:
                 self.space_pressed_during_transcription = True
-                print("Leertaste erkannt - kein automatischer Enter")
+                #print("Leertaste erkannt - kein automatischer Enter")
         except:
             pass  # Ignoriere Fehler bei der Tastenerkennung
 
@@ -291,7 +291,7 @@ class RealtimeSpeechToText:
         if hasattr(self, 'recording_thread') and self.recording_thread.is_alive():
             self.recording_thread.join(timeout=1)
         
-        print("Aufnahme beendet. Transkribiere...")
+        print("Aufnahme beendet. Transkribiere... Press SPACE once, to stop auto-enter in cursor")
 
     def transcribe_audio(self):
         """Transkribiert die aufgenommene Audiodatei"""
